@@ -13,12 +13,17 @@
 
 using namespace std;
 
-const float FPS = 7.5;
+const float FPS = 30;               // Higher FPS for smoother movement
+const float LOGIC_FPS = 7.5;        // Keep game logic at original speed
 const int SCREEN_W = 500;
 const int SCREEN_H = 550;
 
 enum MYKEYS {
     KEY_UP, KEY_DOWN, KEY_LEFT, KEY_RIGHT
+};
+
+enum DIRECTION {
+    DIR_UP, DIR_DOWN, DIR_LEFT, DIR_RIGHT, DIR_NONE
 };
 
 // Game map: 1 represents walls, 0 represents corridors, 2 represents bananas
@@ -53,8 +58,9 @@ char MAP[26][26] = {
 ALLEGRO_DISPLAY *display = nullptr;
 ALLEGRO_EVENT_QUEUE *event_queue = nullptr;
 ALLEGRO_TIMER *timer = nullptr;
+ALLEGRO_TIMER *logic_timer = nullptr;
 ALLEGRO_BITMAP *map_bitmap = nullptr;
-ALLEGRO_BITMAP *pacmon_bitmap = nullptr;
+ALLEGRO_BITMAP *pacmon_bitmap[4] = {nullptr}; // Array for 4 directional images
 ALLEGRO_BITMAP *hunter_red = nullptr;
 ALLEGRO_BITMAP *hunter_blue = nullptr;
 ALLEGRO_BITMAP *hunter_pink = nullptr;
@@ -76,6 +82,7 @@ int score = 0;      // Player score
 int pacmon_i = 15, pacmon_j = 12;
 int pacmon_y = pacmon_i * cell_size;
 int pacmon_x = pacmon_j * cell_size;
+int pacmon_direction = DIR_RIGHT; // Default direction
 
 // Hunters positions
 int hunter_red_i = 12, hunter_red_j = 10;
@@ -99,9 +106,15 @@ bool redraw = true;
 bool exit_game = false;
 bool victory = false;
 bool defeat = false;
+bool update_logic = false;
 
 int last_random_pos = -1;
 int random_chase = -1;
+
+// Game state control
+bool game_over = false;
+int end_game_timer = 0;
+const int END_GAME_DELAY = 180; // About 3 seconds at 60 FPS
 
 // Function to calculate distance between two points
 double distance(int x1, int y1, int x2, int y2) {
@@ -208,6 +221,25 @@ void randomMovement(char map[][26], int &x, int &y, int &pos_x, int &pos_y, int 
     }
 }
 
+// Improved boundary checking function
+bool isValidMove(int i, int j) {
+    // Check map boundaries
+    if (i < 0 || i >= 25 || j < 0 || j >= 25) return false;
+    
+    // Check if the cell is not a wall
+    return MAP[i][j] != '1';
+}
+
+// Check if hunter catches pacmon
+bool checkCollision() {
+    return (
+        (pacmon_i == hunter_red_i && pacmon_j == hunter_red_j) ||
+        (pacmon_i == hunter_blue_i && pacmon_j == hunter_blue_j) ||
+        (pacmon_i == hunter_pink_i && pacmon_j == hunter_pink_j) ||
+        (pacmon_i == hunter_orange_i && pacmon_j == hunter_orange_j)
+    );
+}
+
 int initialize() {
     srand(time(nullptr));
 
@@ -224,6 +256,12 @@ int initialize() {
     timer = al_create_timer(1.0 / FPS);
     if (!timer) {
         cout << "Failed to create timer!" << endl;
+        return 0;
+    }
+    
+    logic_timer = al_create_timer(1.0 / LOGIC_FPS);
+    if (!logic_timer) {
+        cout << "Failed to create logic timer!" << endl;
         return 0;
     }
 
@@ -261,6 +299,7 @@ int initialize() {
     if (!display) {
         cout << "Failed to create display!" << endl;
         al_destroy_timer(timer);
+        al_destroy_timer(logic_timer);
         return 0;
     }
 
@@ -295,10 +334,14 @@ int initialize() {
         return 0;
     }
 
-    // Load pacmon
-    pacmon_bitmap = al_load_bitmap("assets/characters/pacmon.png");
-    if (!pacmon_bitmap) {
-        cout << "Failed to load pacmon!" << endl;
+    // Load pacmon directional images
+    pacmon_bitmap[DIR_RIGHT] = al_load_bitmap("assets/characters/pacright.png");
+    pacmon_bitmap[DIR_DOWN] = al_load_bitmap("assets/characters/pacdown.png");  // Replace with correct files
+    pacmon_bitmap[DIR_LEFT] = al_load_bitmap("assets/characters/pacleft.png");  // when you have them
+    pacmon_bitmap[DIR_UP] = al_load_bitmap("assets/characters/pacup.png");
+    
+    if (!pacmon_bitmap[DIR_RIGHT]) {
+        cout << "Failed to load pacmon right!" << endl;
         al_destroy_display(display);
         return 0;
     }
@@ -371,22 +414,25 @@ int initialize() {
         cout << "Failed to create event queue!" << endl;
         al_destroy_display(display);
         al_destroy_timer(timer);
+        al_destroy_timer(logic_timer);
         return 0;
     }
 
     al_register_event_source(event_queue, al_get_display_event_source(display));
     al_register_event_source(event_queue, al_get_timer_event_source(timer));
+    al_register_event_source(event_queue, al_get_timer_event_source(logic_timer));
     al_register_event_source(event_queue, al_get_keyboard_event_source());
 
     al_clear_to_color(al_map_rgb(91, 141, 91));
     al_flip_display();
     al_start_timer(timer);
+    al_start_timer(logic_timer);
 
     return 1;
 }
 
 int main(int argc, char **argv) {
-    int time = 0;
+    int game_time = 0;
 
     if (!initialize()) return -1;
 
@@ -394,36 +440,105 @@ int main(int argc, char **argv) {
     al_set_audio_stream_playing(music, true);
 
     while (!exit_game) {
-        time++;
-
         ALLEGRO_EVENT ev;
         al_wait_for_event(event_queue, &ev);
 
         if (ev.type == ALLEGRO_EVENT_TIMER) {
-            if (key[KEY_UP] && MAP[pacmon_i - 1][pacmon_j] != '1') {
-                pacmon_i--;
-                pacmon_y = pacmon_i * cell_size;
+            if (ev.timer.source == logic_timer && !game_over) {
+                game_time++;
+                update_logic = true;
+                
+                // Process movement only on logic timer ticks
+                if (key[KEY_UP] && isValidMove(pacmon_i - 1, pacmon_j)) {
+                    pacmon_i--;
+                    pacmon_y = pacmon_i * cell_size;
+                    pacmon_direction = DIR_UP;
+                }
+                else if (key[KEY_DOWN] && isValidMove(pacmon_i + 1, pacmon_j)) {
+                    pacmon_i++;
+                    pacmon_y = pacmon_i * cell_size;
+                    pacmon_direction = DIR_DOWN;
+                }
+                else if (key[KEY_LEFT] && isValidMove(pacmon_i, pacmon_j - 1)) {
+                    pacmon_j--;
+                    pacmon_x = pacmon_j * cell_size;
+                    pacmon_direction = DIR_LEFT;
+                }
+                else if (key[KEY_RIGHT] && isValidMove(pacmon_i, pacmon_j + 1)) {
+                    pacmon_j++;
+                    pacmon_x = pacmon_j * cell_size;
+                    pacmon_direction = DIR_RIGHT;
+                }
+                
+                // Teleport pacmon
+                if (pacmon_i == 12 && pacmon_j >= 25) {
+                    pacmon_i = 12;
+                    pacmon_j = 0;
+                    pacmon_y = pacmon_i * cell_size;
+                    pacmon_x = pacmon_j * cell_size;
+                }
+                
+                if (pacmon_i == 12 && pacmon_j <= -1) {
+                    pacmon_i = 12;
+                    pacmon_j = 24;
+                    pacmon_y = pacmon_i * cell_size;
+                    pacmon_x = pacmon_j * cell_size;
+                }
+                
+                // Move hunters based on game time
+                randomMovement(MAP, hunter_blue_i, hunter_blue_j, hunter_blue_x, hunter_blue_y, 0);
+                
+                if (game_time >= 30)
+                    randomMovement(MAP, hunter_orange_i, hunter_orange_j, hunter_orange_x, hunter_orange_y, 1);
+                
+                if (game_time >= 50)
+                    randomMovement(MAP, hunter_pink_i, hunter_pink_j, hunter_pink_x, hunter_pink_y, 2);
+                
+                if (game_time >= 70)
+                    hunterRedMovement(MAP, hunter_red_i, hunter_red_j, hunter_red_x, hunter_red_y);
+                
+                // pacmon eats a banana
+                if (MAP[pacmon_i][pacmon_j] == '2') {
+                    MAP[pacmon_i][pacmon_j] = '0';
+                    al_play_sample(banana_sound, 0.5, 0.0, 2.0, ALLEGRO_PLAYMODE_ONCE, nullptr);
+                    bananas--;
+                    score++;
+                }
+                
+                // Check for victory
+                if (bananas == 0) {
+                    victory = true;
+                    game_over = true;
+                    al_stop_samples();
+                    al_destroy_audio_stream(music);
+                    al_play_sample(victory_sound, 1.0, 0.0, 1.0, ALLEGRO_PLAYMODE_ONCE, nullptr);
+                }
+                
+                // Check for defeat
+                if (checkCollision()) {
+                    defeat = true;
+                    game_over = true;
+                    al_stop_samples();
+                    al_destroy_audio_stream(music);
+                    music = nullptr; // Prevent double free
+                    al_play_sample(defeat_sound, 1.0, 0.0, 1.0, ALLEGRO_PLAYMODE_ONCE, nullptr);
+                }
             }
-
-            if (key[KEY_DOWN] && MAP[pacmon_i + 1][pacmon_j] != '1') {
-                pacmon_i++;
-                pacmon_y = pacmon_i * cell_size;
+            else if (ev.timer.source == timer) {
+                // Render frame updates on the display timer (higher FPS)
+                if (game_over) {
+                    end_game_timer++;
+                    if (end_game_timer >= END_GAME_DELAY) {
+                        exit_game = true;
+                    }
+                }
+                redraw = true;
             }
-
-            if (key[KEY_LEFT] && MAP[pacmon_i][pacmon_j - 1] != '1') {
-                pacmon_j--;
-                pacmon_x = pacmon_j * cell_size;
-            }
-
-            if (key[KEY_RIGHT] && MAP[pacmon_i][pacmon_j + 1] != '1') {
-                pacmon_j++;
-                pacmon_x = pacmon_j * cell_size;
-            }
-
-            redraw = true;
-        } else if (ev.type == ALLEGRO_EVENT_DISPLAY_CLOSE) {
-            break;
-        } else if (ev.type == ALLEGRO_EVENT_KEY_DOWN) {
+        }
+        else if (ev.type == ALLEGRO_EVENT_DISPLAY_CLOSE) {
+            exit_game = true;
+        }
+        else if (ev.type == ALLEGRO_EVENT_KEY_DOWN) {
             switch (ev.keyboard.keycode) {
                 case ALLEGRO_KEY_UP:
                     key[KEY_UP] = true;
@@ -438,7 +553,8 @@ int main(int argc, char **argv) {
                     key[KEY_RIGHT] = true;
                     break;
             }
-        } else if (ev.type == ALLEGRO_EVENT_KEY_UP) {
+        }
+        else if (ev.type == ALLEGRO_EVENT_KEY_UP) {
             switch (ev.keyboard.keycode) {
                 case ALLEGRO_KEY_UP:
                     key[KEY_UP] = false;
@@ -458,119 +574,73 @@ int main(int argc, char **argv) {
             }
         }
 
-        // Teleport pacmon
-        if (pacmon_i == 12 && pacmon_j >= 25) {
-            pacmon_i = 12;
-            pacmon_j = 0;
-            pacmon_y = pacmon_i * cell_size;
-            pacmon_x = pacmon_j * cell_size;
-        }
-
-        if (pacmon_i == 12 && pacmon_j <= -1) {
-            pacmon_i = 12;
-            pacmon_j = 24;
-            pacmon_y = pacmon_i * cell_size;
-            pacmon_x = pacmon_j * cell_size;
-        }
-
-        // pacmon eats a banana
-        if (MAP[pacmon_i][pacmon_j] == '2') {
-            MAP[pacmon_i][pacmon_j] = '0';
-            al_play_sample(banana_sound, 0.5, 0.0, 2.0, ALLEGRO_PLAYMODE_ONCE, nullptr);
-            bananas--;
-            score++;
-        }
-
-        if (bananas == 0) {
-            victory = true;
-        }
-
         if (redraw && al_is_event_queue_empty(event_queue)) {
             redraw = false;
-
             al_clear_to_color(al_map_rgb(91, 141, 91));
 
-            al_draw_bitmap(map_bitmap, 0, 0, 0);
-            al_draw_bitmap(pacmon_bitmap, pacmon_x, pacmon_y, 0);
-            al_draw_bitmap(hunter_red, hunter_red_x, hunter_red_y, 0);
-            al_draw_bitmap(hunter_blue, hunter_blue_x, hunter_blue_y, 0);
-            al_draw_bitmap(hunter_pink, hunter_pink_x, hunter_pink_y, 0);
-            al_draw_bitmap(hunter_orange, hunter_orange_x, hunter_orange_y, 0);
-
-            // Start hunters
-            randomMovement(MAP, hunter_blue_i, hunter_blue_j, hunter_blue_x, hunter_blue_y, 0);
-
-            if (time >= 30)
-                randomMovement(MAP, hunter_orange_i, hunter_orange_j, hunter_orange_x, hunter_orange_y, 1);
-
-            if (time >= 50)
-                randomMovement(MAP, hunter_pink_i, hunter_pink_j, hunter_pink_x, hunter_pink_y, 2);
-
-            if (time >= 70)
-                hunterRedMovement(MAP, hunter_red_i, hunter_red_j, hunter_red_x, hunter_red_y);
-
-            // Draw bananas
-            for (int i = 1; i < 25; i++) {
-                for (int j = 1; j < 25; j++) {
-                    if (MAP[i][j] == '2') {
-                        int banana_y = i * cell_size;
-                        int banana_x = j * cell_size;
-                        al_draw_bitmap(banana_bitmap, banana_x, banana_y, 0);
+            if (victory) {
+                al_draw_bitmap(victory_bitmap, 0, 0, 0);
+                al_draw_textf(font, al_map_rgb(255, 255, 255), SCREEN_W / 2 - 50, SCREEN_H - 50, 0, "Score: %d", score);
+            }
+            else if (defeat) {
+                al_draw_bitmap(defeat_bitmap, 0, 0, 0);
+                al_draw_textf(font, al_map_rgb(255, 255, 255), SCREEN_W / 2 - 50, SCREEN_H - 50, 0, "Score: %d", score);
+            }
+            else {
+                // Normal gameplay rendering
+                al_draw_bitmap(map_bitmap, 0, 0, 0);
+                
+                // Draw PacMon with appropriate directional sprite
+                al_draw_bitmap(pacmon_bitmap[pacmon_direction], pacmon_x, pacmon_y, 0);
+                
+                // Draw hunters
+                al_draw_bitmap(hunter_red, hunter_red_x, hunter_red_y, 0);
+                al_draw_bitmap(hunter_blue, hunter_blue_x, hunter_blue_y, 0);
+                al_draw_bitmap(hunter_pink, hunter_pink_x, hunter_pink_y, 0);
+                al_draw_bitmap(hunter_orange, hunter_orange_x, hunter_orange_y, 0);
+                
+                // Draw bananas
+                for (int i = 1; i < 25; i++) {
+                    for (int j = 1; j < 25; j++) {
+                        if (MAP[i][j] == '2') {
+                            int banana_y = i * cell_size;
+                            int banana_x = j * cell_size;
+                            al_draw_bitmap(banana_bitmap, banana_x, banana_y, 0);
+                        }
                     }
                 }
+                
+                // Draw score
+                al_draw_textf(font, al_map_rgb(255, 255, 255), 0, 515, 0, "Score: %d", score);
             }
-
-            al_draw_textf(font, al_map_rgb(255, 255, 255), 0, 515, 0, "Score: %d", score);
-
-            if (victory) {
-                al_destroy_sample(banana_sound);
-                al_destroy_audio_stream(music);
-                al_play_sample(victory_sound, 1.0, 0.0, 1.0, ALLEGRO_PLAYMODE_ONCE, nullptr);
-                al_destroy_bitmap(map_bitmap);
-                al_draw_bitmap(victory_bitmap, 0, 0, 0);
-                al_rest(7.5);
-                break;
-            }
-
-            // Check for defeat conditions
-            if ((pacmon_i == hunter_red_i && pacmon_j == hunter_red_j) ||
-                (pacmon_i == hunter_orange_i && pacmon_j == hunter_orange_j) ||
-                (pacmon_i == hunter_blue_i && pacmon_j == hunter_blue_j) ||
-                (pacmon_i == hunter_pink_i && pacmon_j == hunter_pink_j)) {
-                defeat = true;
-            }
-
-            if (defeat) {
-                al_destroy_sample(banana_sound);
-                al_destroy_audio_stream(music);
-                al_play_sample(defeat_sound, 1.0, 0.0, 1.0, ALLEGRO_PLAYMODE_ONCE, nullptr);
-                al_destroy_bitmap(map_bitmap);
-                al_draw_bitmap(defeat_bitmap, 0, 0, 0);
-                al_rest(7.5);
-                break;
-            }
-
+            
             al_flip_display();
         }
     }
 
-    // Clean up resources
-    al_destroy_bitmap(map_bitmap);
-    al_destroy_bitmap(pacmon_bitmap);
-    al_destroy_bitmap(hunter_red);
-    al_destroy_bitmap(hunter_blue);
-    al_destroy_bitmap(hunter_pink);
-    al_destroy_bitmap(hunter_orange);
-    al_destroy_bitmap(banana_bitmap);
-    al_destroy_bitmap(victory_bitmap);
-    al_destroy_bitmap(defeat_bitmap);
-    al_destroy_audio_stream(music);
-    al_destroy_sample(victory_sound);
-    al_destroy_sample(defeat_sound);
-    al_destroy_font(font);
-    al_destroy_timer(timer);
-    al_destroy_display(display);
-    al_destroy_event_queue(event_queue);
+    // Clean up resources properly
+    if (banana_sound) al_destroy_sample(banana_sound);
+    if (victory_sound) al_destroy_sample(victory_sound);
+    if (defeat_sound) al_destroy_sample(defeat_sound);
+    if (music) al_destroy_audio_stream(music);
+    
+    for (int i = 0; i < 4; i++) {
+        if (pacmon_bitmap[i]) al_destroy_bitmap(pacmon_bitmap[i]);
+    }
+    
+    if (map_bitmap) al_destroy_bitmap(map_bitmap);
+    if (hunter_red) al_destroy_bitmap(hunter_red);
+    if (hunter_blue) al_destroy_bitmap(hunter_blue);
+    if (hunter_pink) al_destroy_bitmap(hunter_pink);
+    if (hunter_orange) al_destroy_bitmap(hunter_orange);
+    if (banana_bitmap) al_destroy_bitmap(banana_bitmap);
+    if (victory_bitmap) al_destroy_bitmap(victory_bitmap);
+    if (defeat_bitmap) al_destroy_bitmap(defeat_bitmap);
+    if (font) al_destroy_font(font);
+    if (timer) al_destroy_timer(timer);
+    if (logic_timer) al_destroy_timer(logic_timer);
+    if (display) al_destroy_display(display);
+    if (event_queue) al_destroy_event_queue(event_queue);
 
     return 0;
 }
