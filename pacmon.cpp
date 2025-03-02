@@ -17,6 +17,7 @@ const float FPS = 30;               // Higher FPS for smoother movement
 const float LOGIC_FPS = 7.5;        // Keep game logic at original speed
 const int SCREEN_W = 500;
 const int SCREEN_H = 550;
+const int HUNTER_SKIP_FRAMES = 1;  // Higher values make hunters slower
 
 enum MYKEYS {
     KEY_UP, KEY_DOWN, KEY_LEFT, KEY_RIGHT
@@ -85,6 +86,8 @@ int pacmon_x = pacmon_j * cell_size;
 int pacmon_direction = DIR_RIGHT; // Default direction
 
 // Hunters positions
+int hunter_move_counter = 0;
+
 int hunter_red_i = 12, hunter_red_j = 10;
 int hunter_red_y = hunter_red_i * cell_size;
 int hunter_red_x = hunter_red_j * cell_size;
@@ -130,66 +133,15 @@ struct Chase {
 
 // Function for red hunter movement
 void hunterRedMovement(char map[][26], int &x, int &y, int &pos_x, int &pos_y) {
-    // Red hunter does not enter the spawn zone after leaving it
-    if ((x == 8 && y == 11 && pacmon_j <= y)) {
-        y--;
-        pos_y = x * cell_size;
-        return;
-    } else if ((x == 8 && y == 11 && pacmon_j >= y)) {
-        y++;
-        pos_y = x * cell_size;
-        return;
-    }
-
-    // Calculate distances around the hunter
-    Chase calc[4];
-    calc[0].dist = distance(x + 1, y, pacmon_i, pacmon_j); calc[0].x = x + 1; calc[0].y = y; calc[0].path = 'S';
-    calc[1].dist = distance(x, y - 1, pacmon_i, pacmon_j); calc[1].x = x; calc[1].y = y - 1; calc[1].path = 'A';
-    calc[2].dist = distance(x - 1, y, pacmon_i, pacmon_j); calc[2].x = x - 1; calc[2].y = y; calc[2].path = 'W';
-    calc[3].dist = distance(x, y + 1, pacmon_i, pacmon_j); calc[3].x = x; calc[3].y = y + 1; calc[3].path = 'D';
-
-    int way = 1000;
-    double min_dist = 1000;
-
-    // Find the best path to chase pacmon
-    for (int i = 0; i < 4; i++) {
-        if (calc[i].dist < min_dist && map[calc[i].x][calc[i].y] != '1') {
-            min_dist = calc[i].dist;
-            way = i;
+    // Specific logic to exit the "house" area
+    if (x >= 11 && x <= 14 && y >= 9 && y <= 15) {
+        // We're in the "house" area - prioritize moving upward to escape
+        if (map[x-1][y] != '1') {
+            x--;
+            pos_y = x * cell_size;
+            return;
         }
     }
-
-    if (way == 0) {
-        x++;
-        pos_y = x * cell_size;
-    } else if (way == 2) {
-        x--;
-        pos_y = x * cell_size;
-    } else if (way == 3) {
-        y++;
-        pos_x = y * cell_size;
-    } else if (way == 1) {
-        y--;
-        pos_x = y * cell_size;
-    }
-
-    // Teleport hunter if it reaches the edge
-    if (x == 10 && y == -1) {
-        x = 10;
-        y = 23;
-        pos_y = x * cell_size;
-        pos_x = y * cell_size;
-    } else if (x == 10 && y == 22) {
-        x = 10;
-        y = -1;
-        pos_y = x * cell_size;
-        pos_x = y * cell_size;
-    }
-}
-
-// Function for random hunter movement
-void randomMovement(char map[][26], int &x, int &y, int &pos_x, int &pos_y, int hunter_type) {
-    random_chase = rand() % 4;
 
     // Teleport hunter if it reaches the edge
     if (x == 12 && y == -1) {
@@ -206,18 +158,150 @@ void randomMovement(char map[][26], int &x, int &y, int &pos_x, int &pos_y, int 
         return;
     }
 
-    if (random_chase == 0 && map[x - 1][y] != '1') {
-        x--;
-        pos_y = x * cell_size;
-    } else if (random_chase == 1 && map[x + 1][y] != '1') {
+    // Calculate distances around the hunter
+    Chase calc[4];
+    calc[0].dist = distance(x + 1, y, pacmon_i, pacmon_j); calc[0].x = x + 1; calc[0].y = y; calc[0].path = 'S';
+    calc[1].dist = distance(x, y - 1, pacmon_i, pacmon_j); calc[1].x = x; calc[1].y = y - 1; calc[1].path = 'A';
+    calc[2].dist = distance(x - 1, y, pacmon_i, pacmon_j); calc[2].x = x - 1; calc[2].y = y; calc[2].path = 'W';
+    calc[3].dist = distance(x, y + 1, pacmon_i, pacmon_j); calc[3].x = x; calc[3].y = y + 1; calc[3].path = 'D';
+
+    // Prevent getting stuck by avoiding backtracking
+    static int last_dir = -1;
+    
+    int way = -1;
+    double min_dist = 1000;
+    
+    // First try: find valid move that's not opposite to last move
+    for (int i = 0; i < 4; i++) {
+        if (map[calc[i].x][calc[i].y] != '1' && 
+            !((last_dir == 0 && i == 2) || 
+              (last_dir == 2 && i == 0) ||
+              (last_dir == 1 && i == 3) ||
+              (last_dir == 3 && i == 1))) {
+            
+            if (calc[i].dist < min_dist) {
+                min_dist = calc[i].dist;
+                way = i;
+            }
+        }
+    }
+    
+    // Second try: if stuck, any valid move is ok
+    if (way == -1) {
+        for (int i = 0; i < 4; i++) {
+            if (map[calc[i].x][calc[i].y] != '1') {
+                if (calc[i].dist < min_dist) {
+                    min_dist = calc[i].dist;
+                    way = i;
+                }
+            }
+        }
+    }
+
+    if (way == 0) {
         x++;
         pos_y = x * cell_size;
-    } else if (random_chase == 2 && map[x][y + 1] != '1') {
+        last_dir = 0;
+    } else if (way == 2) {
+        x--;
+        pos_y = x * cell_size;
+        last_dir = 2;
+    } else if (way == 3) {
         y++;
         pos_x = y * cell_size;
-    } else if (random_chase == 3 && map[x][y - 1] != '1') {
+        last_dir = 3;
+    } else if (way == 1) {
         y--;
         pos_x = y * cell_size;
+        last_dir = 1;
+    }
+}
+
+// Function for random hunter movement
+void randomMovement(char map[][26], int &x, int &y, int &pos_x, int &pos_y, int hunter_type) {
+    // Specific logic to exit the "house" area
+    if (x >= 11 && x <= 14 && y >= 9 && y <= 15) {
+        // We're in the "house" area - prioritize moving upward to escape
+        if (map[x-1][y] != '1') {
+            x--;
+            pos_y = x * cell_size;
+            return;
+        }
+    }
+
+    // Teleport hunter if it reaches the edge
+    if (x == 12 && y == -1) {
+        x = 12;
+        y = 24;
+        pos_x = y * cell_size;
+        pos_y = x * cell_size;
+        return;
+    } else if (x == 12 && y == 25) {
+        x = 12;
+        y = 0;
+        pos_x = y * cell_size;
+        pos_y = x * cell_size;
+        return;
+    }
+
+    // Calculate possible moves
+    Chase calc[4];
+    calc[0].dist = distance(x + 1, y, pacmon_i, pacmon_j); calc[0].x = x + 1; calc[0].y = y; calc[0].path = 'S';
+    calc[1].dist = distance(x, y - 1, pacmon_i, pacmon_j); calc[1].x = x; calc[1].y = y - 1; calc[1].path = 'A';
+    calc[2].dist = distance(x - 1, y, pacmon_i, pacmon_j); calc[2].x = x - 1; calc[2].y = y; calc[2].path = 'W';
+    calc[3].dist = distance(x, y + 1, pacmon_i, pacmon_j); calc[3].x = x; calc[3].y = y + 1; calc[3].path = 'D';
+
+    // Prevent getting stuck by avoiding backtracking
+    static int last_dir[4] = {-1, -1, -1, -1};  // One for each hunter
+    
+    int way = -1;
+    double min_dist = 1000;
+    
+    // First try: find valid move that's not opposite to last move
+    for (int i = 0; i < 4; i++) {
+        if (map[calc[i].x][calc[i].y] != '1' && 
+            !((last_dir[hunter_type] == 0 && i == 2) || 
+              (last_dir[hunter_type] == 2 && i == 0) ||
+              (last_dir[hunter_type] == 1 && i == 3) ||
+              (last_dir[hunter_type] == 3 && i == 1))) {
+            
+            // Add randomness to movement at intersections
+            double r = (rand() % 20) / 100.0;  // Random value between 0.00 and 0.19
+            if (calc[i].dist + r < min_dist) {
+                min_dist = calc[i].dist + r;
+                way = i;
+            }
+        }
+    }
+    
+    // Second try: if stuck, any valid move is ok
+    if (way == -1) {
+        for (int i = 0; i < 4; i++) {
+            if (map[calc[i].x][calc[i].y] != '1') {
+                if (calc[i].dist < min_dist) {
+                    min_dist = calc[i].dist;
+                    way = i;
+                }
+            }
+        }
+    }
+
+    if (way == 0) {
+        x++;
+        pos_y = x * cell_size;
+        last_dir[hunter_type] = 0;
+    } else if (way == 2) {
+        x--;
+        pos_y = x * cell_size;
+        last_dir[hunter_type] = 2;
+    } else if (way == 3) {
+        y++;
+        pos_x = y * cell_size;
+        last_dir[hunter_type] = 3;
+    } else if (way == 1) {
+        y--;
+        pos_x = y * cell_size;
+        last_dir[hunter_type] = 1;
     }
 }
 
@@ -486,16 +570,25 @@ int main(int argc, char **argv) {
                 }
                 
                 // Move hunters based on game time
-                randomMovement(MAP, hunter_blue_i, hunter_blue_j, hunter_blue_x, hunter_blue_y, 0);
-                
-                if (game_time >= 30)
-                    randomMovement(MAP, hunter_orange_i, hunter_orange_j, hunter_orange_x, hunter_orange_y, 1);
-                
-                if (game_time >= 50)
-                    randomMovement(MAP, hunter_pink_i, hunter_pink_j, hunter_pink_x, hunter_pink_y, 2);
-                
-                if (game_time >= 70)
-                    hunterRedMovement(MAP, hunter_red_i, hunter_red_j, hunter_red_x, hunter_red_y);
+                if (update_logic) {
+                    hunter_move_counter++;
+                    
+                    // Only move hunters every HUNTER_SKIP_FRAMES frame
+                    if (hunter_move_counter >= HUNTER_SKIP_FRAMES) {
+                        hunter_move_counter = 0;
+                        
+                        randomMovement(MAP, hunter_blue_i, hunter_blue_j, hunter_blue_x, hunter_blue_y, 0);
+                        
+                        if (game_time >= 30)
+                            randomMovement(MAP, hunter_orange_i, hunter_orange_j, hunter_orange_x, hunter_orange_y, 1);
+                        
+                        if (game_time >= 50)
+                            randomMovement(MAP, hunter_pink_i, hunter_pink_j, hunter_pink_x, hunter_pink_y, 2);
+                        
+                        if (game_time >= 70)
+                            hunterRedMovement(MAP, hunter_red_i, hunter_red_j, hunter_red_x, hunter_red_y);
+                    }
+                }
                 
                 // pacmon eats a banana
                 if (MAP[pacmon_i][pacmon_j] == '2') {
