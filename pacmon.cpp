@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <cctype>
+#include <vector>
 
 using namespace std;
 
@@ -17,7 +18,7 @@ const float FPS = 30;               // Higher FPS for smoother movement
 const float LOGIC_FPS = 7.5;        // Keep game logic at original speed
 const int SCREEN_W = 500;
 const int SCREEN_H = 550;
-const int HUNTER_SKIP_FRAMES = 1;  // Higher values make hunters slower
+const int HUNTER_SKIP_FRAMES = 2;  // Higher values make hunters slower
 
 enum MYKEYS {
     KEY_UP, KEY_DOWN, KEY_LEFT, KEY_RIGHT
@@ -133,16 +134,6 @@ struct Chase {
 
 // Function for red hunter movement
 void hunterRedMovement(char map[][26], int &x, int &y, int &pos_x, int &pos_y) {
-    // Specific logic to exit the "house" area
-    if (x >= 11 && x <= 14 && y >= 9 && y <= 15) {
-        // We're in the "house" area - prioritize moving upward to escape
-        if (map[x-1][y] != '1') {
-            x--;
-            pos_y = x * cell_size;
-            return;
-        }
-    }
-
     // Teleport hunter if it reaches the edge
     if (x == 12 && y == -1) {
         x = 12;
@@ -157,78 +148,109 @@ void hunterRedMovement(char map[][26], int &x, int &y, int &pos_x, int &pos_y) {
         pos_y = x * cell_size;
         return;
     }
+    
+    // Special case: if in the "house", prioritize moving upward
+    if (x >= 11 && x <= 14 && y >= 9 && y <= 15) {
+        if (map[x-1][y] != '1') {
+            x--;
+            pos_y = x * cell_size;
+            return;
+        }
+    }
 
-    // Calculate distances around the hunter
-    Chase calc[4];
-    calc[0].dist = distance(x + 1, y, pacmon_i, pacmon_j); calc[0].x = x + 1; calc[0].y = y; calc[0].path = 'S';
-    calc[1].dist = distance(x, y - 1, pacmon_i, pacmon_j); calc[1].x = x; calc[1].y = y - 1; calc[1].path = 'A';
-    calc[2].dist = distance(x - 1, y, pacmon_i, pacmon_j); calc[2].x = x - 1; calc[2].y = y; calc[2].path = 'W';
-    calc[3].dist = distance(x, y + 1, pacmon_i, pacmon_j); calc[3].x = x; calc[3].y = y + 1; calc[3].path = 'D';
-
-    // Prevent getting stuck by avoiding backtracking
+    // Get possible directions (non-wall cells)
+    vector<int> possible_dirs;
+    
+    // Check all four directions
+    if (map[x+1][y] != '1') possible_dirs.push_back(0); // Down
+    if (map[x][y-1] != '1') possible_dirs.push_back(1); // Left
+    if (map[x-1][y] != '1') possible_dirs.push_back(2); // Up
+    if (map[x][y+1] != '1') possible_dirs.push_back(3); // Right
+    
+    // Static variables to store last direction
     static int last_dir = -1;
+    static int consecutive_moves = 0;
     
-    int way = -1;
+    // If we have multiple options, avoid going back the way we came
+    if (possible_dirs.size() > 1 && last_dir != -1) {
+        for (auto it = possible_dirs.begin(); it != possible_dirs.end(); ) {
+            // Remove opposite direction to avoid backtracking
+            if ((*it == 0 && last_dir == 2) ||
+                (*it == 2 && last_dir == 0) ||
+                (*it == 1 && last_dir == 3) ||
+                (*it == 3 && last_dir == 1)) {
+                it = possible_dirs.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+    
+    // Force direction change after too many consecutive moves in same direction
+    if (consecutive_moves > 3 && possible_dirs.size() > 1) {
+        for (auto it = possible_dirs.begin(); it != possible_dirs.end(); ) {
+            if (*it == last_dir) {
+                it = possible_dirs.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+    
+    // Choose based on shortest path to pacmon most of the time
     double min_dist = 1000;
+    int best_dir = -1;
     
-    // First try: find valid move that's not opposite to last move
-    for (int i = 0; i < 4; i++) {
-        if (map[calc[i].x][calc[i].y] != '1' && 
-            !((last_dir == 0 && i == 2) || 
-              (last_dir == 2 && i == 0) ||
-              (last_dir == 1 && i == 3) ||
-              (last_dir == 3 && i == 1))) {
-            
-            if (calc[i].dist < min_dist) {
-                min_dist = calc[i].dist;
-                way = i;
-            }
+    for (size_t i = 0; i < possible_dirs.size(); i++) {
+        int test_x = x, test_y = y;
+        
+        if (possible_dirs[i] == 0) test_x++;
+        else if (possible_dirs[i] == 1) test_y--;
+        else if (possible_dirs[i] == 2) test_x--;
+        else if (possible_dirs[i] == 3) test_y++;
+        
+        double dist = distance(test_x, test_y, pacmon_i, pacmon_j);
+        
+        // Add small random factor (10%) to avoid predictability
+        dist -= (rand() % 10) / 100.0;
+        
+        if (dist < min_dist) {
+            min_dist = dist;
+            best_dir = i;
         }
     }
     
-    // Second try: if stuck, any valid move is ok
-    if (way == -1) {
-        for (int i = 0; i < 4; i++) {
-            if (map[calc[i].x][calc[i].y] != '1') {
-                if (calc[i].dist < min_dist) {
-                    min_dist = calc[i].dist;
-                    way = i;
-                }
-            }
-        }
-    }
-
-    if (way == 0) {
+    // Choose the best direction
+    int dir_choice = possible_dirs[best_dir];
+    
+    // Update position based on chosen direction
+    if (dir_choice == 0) {
         x++;
         pos_y = x * cell_size;
-        last_dir = 0;
-    } else if (way == 2) {
-        x--;
-        pos_y = x * cell_size;
-        last_dir = 2;
-    } else if (way == 3) {
-        y++;
-        pos_x = y * cell_size;
-        last_dir = 3;
-    } else if (way == 1) {
+    } else if (dir_choice == 1) {
         y--;
         pos_x = y * cell_size;
-        last_dir = 1;
+    } else if (dir_choice == 2) {
+        x--;
+        pos_y = x * cell_size;
+    } else if (dir_choice == 3) {
+        y++;
+        pos_x = y * cell_size;
     }
+    
+    // Update consecutive moves counter
+    if (dir_choice == last_dir) {
+        consecutive_moves++;
+    } else {
+        consecutive_moves = 0;
+    }
+    
+    // Save last direction
+    last_dir = dir_choice;
 }
 
 // Function for random hunter movement
 void randomMovement(char map[][26], int &x, int &y, int &pos_x, int &pos_y, int hunter_type) {
-    // Specific logic to exit the "house" area
-    if (x >= 11 && x <= 14 && y >= 9 && y <= 15) {
-        // We're in the "house" area - prioritize moving upward to escape
-        if (map[x-1][y] != '1') {
-            x--;
-            pos_y = x * cell_size;
-            return;
-        }
-    }
-
     // Teleport hunter if it reaches the edge
     if (x == 12 && y == -1) {
         x = 12;
@@ -244,65 +266,120 @@ void randomMovement(char map[][26], int &x, int &y, int &pos_x, int &pos_y, int 
         return;
     }
 
-    // Calculate possible moves
-    Chase calc[4];
-    calc[0].dist = distance(x + 1, y, pacmon_i, pacmon_j); calc[0].x = x + 1; calc[0].y = y; calc[0].path = 'S';
-    calc[1].dist = distance(x, y - 1, pacmon_i, pacmon_j); calc[1].x = x; calc[1].y = y - 1; calc[1].path = 'A';
-    calc[2].dist = distance(x - 1, y, pacmon_i, pacmon_j); calc[2].x = x - 1; calc[2].y = y; calc[2].path = 'W';
-    calc[3].dist = distance(x, y + 1, pacmon_i, pacmon_j); calc[3].x = x; calc[3].y = y + 1; calc[3].path = 'D';
-
-    // Prevent getting stuck by avoiding backtracking
-    static int last_dir[4] = {-1, -1, -1, -1};  // One for each hunter
+    // Get possible directions (non-wall cells)
+    vector<int> possible_dirs;
     
-    int way = -1;
-    double min_dist = 1000;
+    // Check all four directions
+    if (map[x+1][y] != '1') possible_dirs.push_back(0); // Down
+    if (map[x][y-1] != '1') possible_dirs.push_back(1); // Left
+    if (map[x-1][y] != '1') possible_dirs.push_back(2); // Up
+    if (map[x][y+1] != '1') possible_dirs.push_back(3); // Right
     
-    // First try: find valid move that's not opposite to last move
-    for (int i = 0; i < 4; i++) {
-        if (map[calc[i].x][calc[i].y] != '1' && 
-            !((last_dir[hunter_type] == 0 && i == 2) || 
-              (last_dir[hunter_type] == 2 && i == 0) ||
-              (last_dir[hunter_type] == 1 && i == 3) ||
-              (last_dir[hunter_type] == 3 && i == 1))) {
+    // Special case: if in the "house", prioritize moving upward
+    if (x >= 11 && x <= 14 && y >= 9 && y <= 15) {
+        if (map[x-1][y] != '1') {
+            x--;
+            pos_y = x * cell_size;
+            return;
+        }
+    }
+    
+    // Static variables to store last direction for each hunter
+    static int last_dir[4] = {-1, -1, -1, -1};
+    static int consecutive_moves[4] = {0, 0, 0, 0};
+    
+    // If we have multiple options, avoid going back the way we came
+    if (possible_dirs.size() > 1 && last_dir[hunter_type] != -1) {
+        for (auto it = possible_dirs.begin(); it != possible_dirs.end(); ) {
+            // Remove opposite direction to avoid backtracking
+            if ((*it == 0 && last_dir[hunter_type] == 2) ||
+                (*it == 2 && last_dir[hunter_type] == 0) ||
+                (*it == 1 && last_dir[hunter_type] == 3) ||
+                (*it == 3 && last_dir[hunter_type] == 1)) {
+                it = possible_dirs.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+    
+    // Force direction change after too many consecutive moves in same direction
+    if (consecutive_moves[hunter_type] > 3 && possible_dirs.size() > 1) {
+        for (auto it = possible_dirs.begin(); it != possible_dirs.end(); ) {
+            if (*it == last_dir[hunter_type]) {
+                it = possible_dirs.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+    
+    // If we have no valid directions (shouldn't happen), use any non-wall direction
+    if (possible_dirs.empty()) {
+        if (map[x+1][y] != '1') possible_dirs.push_back(0);
+        if (map[x][y-1] != '1') possible_dirs.push_back(1);
+        if (map[x-1][y] != '1') possible_dirs.push_back(2);
+        if (map[x][y+1] != '1') possible_dirs.push_back(3);
+    }
+    
+    // Choose a random direction from possible directions
+    int dir_choice;
+    int choice_index;
+    
+    // Add bias toward pacmon occasionally
+    int chase_chance = (rand() % 100);
+    if (chase_chance < 30) {  // 30% chance to chase
+        // Calculate distances to pacmon in each possible direction
+        double min_dist = 1000;
+        int best_dir = -1;
+        
+        for (size_t i = 0; i < possible_dirs.size(); i++) {
+            int test_x = x, test_y = y;
             
-            // Add randomness to movement at intersections
-            double r = (rand() % 20) / 100.0;  // Random value between 0.00 and 0.19
-            if (calc[i].dist + r < min_dist) {
-                min_dist = calc[i].dist + r;
-                way = i;
+            if (possible_dirs[i] == 0) test_x++;
+            else if (possible_dirs[i] == 1) test_y--;
+            else if (possible_dirs[i] == 2) test_x--;
+            else if (possible_dirs[i] == 3) test_y++;
+            
+            double dist = distance(test_x, test_y, pacmon_i, pacmon_j);
+            if (dist < min_dist) {
+                min_dist = dist;
+                best_dir = i;
             }
         }
+        
+        choice_index = best_dir;
+    } else {
+        // Pure random movement
+        choice_index = rand() % possible_dirs.size();
     }
     
-    // Second try: if stuck, any valid move is ok
-    if (way == -1) {
-        for (int i = 0; i < 4; i++) {
-            if (map[calc[i].x][calc[i].y] != '1') {
-                if (calc[i].dist < min_dist) {
-                    min_dist = calc[i].dist;
-                    way = i;
-                }
-            }
-        }
-    }
-
-    if (way == 0) {
+    dir_choice = possible_dirs[choice_index];
+    
+    // Update position based on chosen direction
+    if (dir_choice == 0) {
         x++;
         pos_y = x * cell_size;
-        last_dir[hunter_type] = 0;
-    } else if (way == 2) {
-        x--;
-        pos_y = x * cell_size;
-        last_dir[hunter_type] = 2;
-    } else if (way == 3) {
-        y++;
-        pos_x = y * cell_size;
-        last_dir[hunter_type] = 3;
-    } else if (way == 1) {
+    } else if (dir_choice == 1) {
         y--;
         pos_x = y * cell_size;
-        last_dir[hunter_type] = 1;
+    } else if (dir_choice == 2) {
+        x--;
+        pos_y = x * cell_size;
+    } else if (dir_choice == 3) {
+        y++;
+        pos_x = y * cell_size;
     }
+    
+    // Update consecutive moves counter
+    if (dir_choice == last_dir[hunter_type]) {
+        consecutive_moves[hunter_type]++;
+    } else {
+        consecutive_moves[hunter_type] = 0;
+    }
+    
+    // Save last direction
+    last_dir[hunter_type] = dir_choice;
 }
 
 // Improved boundary checking function
@@ -577,16 +654,24 @@ int main(int argc, char **argv) {
                     if (hunter_move_counter >= HUNTER_SKIP_FRAMES) {
                         hunter_move_counter = 0;
                         
+                        // Each hunter has different behavior
+                        // Blue hunter - mostly random movement
                         randomMovement(MAP, hunter_blue_i, hunter_blue_j, hunter_blue_x, hunter_blue_y, 0);
                         
-                        if (game_time >= 30)
+                        if (game_time >= 30) {
+                            // Orange hunter - enters the game with delay
                             randomMovement(MAP, hunter_orange_i, hunter_orange_j, hunter_orange_x, hunter_orange_y, 1);
+                        }
                         
-                        if (game_time >= 50)
+                        if (game_time >= 50) {
+                            // Pink hunter - enters the game with delay
                             randomMovement(MAP, hunter_pink_i, hunter_pink_j, hunter_pink_x, hunter_pink_y, 2);
+                        }
                         
-                        if (game_time >= 70)
+                        if (game_time >= 70) {
+                            // Red hunter - most aggressive, intelligent hunter
                             hunterRedMovement(MAP, hunter_red_i, hunter_red_j, hunter_red_x, hunter_red_y);
+                        }
                     }
                 }
                 
