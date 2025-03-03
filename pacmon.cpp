@@ -17,7 +17,7 @@ const float FPS = 30;               // Higher FPS for smoother movement
 const float LOGIC_FPS = 7.5;        // Keep game logic at original speed
 const int SCREEN_W = 500;
 const int SCREEN_H = 550;
-const int HUNTER_SKIP_FRAMES = 1;  // Higher values make hunters slower
+const int HUNTER_SKIP_FRAMES = 10;  // Higher values make hunters slower
 
 const int MODE_SCATTER = 0;
 const int MODE_CHASE = 1;
@@ -563,11 +563,18 @@ int main(int argc, char **argv) {
                     pacmon_y = pacmon_i * cell_size;
                     pacmon_x = pacmon_j * cell_size;
                 }
-                
-                if (pacmon_i == 12 && pacmon_j <= -1) {
+                else if (pacmon_i == 12 && pacmon_j <= -1) {
                     pacmon_i = 12;
                     pacmon_j = 24;
                     pacmon_y = pacmon_i * cell_size;
+                    pacmon_x = pacmon_j * cell_size;
+                }
+                else if (pacmon_i == 12 && pacmon_j == 0 && key[KEY_LEFT]) {
+                    pacmon_j = 24;
+                    pacmon_x = pacmon_j * cell_size;
+                }
+                else if (pacmon_i == 12 && pacmon_j == 24 && key[KEY_RIGHT]) {
+                    pacmon_j = 0;
                     pacmon_x = pacmon_j * cell_size;
                 }
                 
