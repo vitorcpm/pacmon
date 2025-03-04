@@ -1,29 +1,29 @@
 CC = g++
-CFLAGS = -Wall -std=c++11
+CFLAGS = -Wall -g
 LDFLAGS = -lallegro -lallegro_image -lallegro_font -lallegro_ttf -lallegro_audio -lallegro_acodec
+INCLUDE = -I./include
+SRC = main.cpp src/game.cpp src/entities.cpp src/resources.cpp
+OBJ = $(SRC:.cpp=.o)
+EXEC = pacmon
 
-SRC_DIR = src
-INCLUDE_DIR = include
-OBJ_DIR = obj
+all: $(EXEC)
 
-SOURCES = main.cpp $(SRC_DIR)/game.cpp $(SRC_DIR)/map.cpp $(SRC_DIR)/entity.cpp $(SRC_DIR)/hunter.cpp
-OBJECTS = $(patsubst %.cpp,$(OBJ_DIR)/%.o,$(notdir $(SOURCES)))
-EXECUTABLE = pacmon
+$(EXEC): $(OBJ)
+	$(CC) $(OBJ) -o $(EXEC) $(LDFLAGS)
 
-$(shell mkdir -p $(OBJ_DIR))
+main.o: main.cpp include/game.h include/entities.h include/resources.h
+	$(CC) $(CFLAGS) $(INCLUDE) -c main.cpp -o main.o
 
-all: $(EXECUTABLE)
+src/game.o: src/game.cpp include/game.h include/entities.h include/resources.h
+	$(CC) $(CFLAGS) $(INCLUDE) -c src/game.cpp -o src/game.o
 
-$(EXECUTABLE): $(OBJECTS)
-	$(CC) $(OBJECTS) -o $@ $(LDFLAGS)
+src/entities.o: src/entities.cpp include/entities.h include/game.h
+	$(CC) $(CFLAGS) $(INCLUDE) -c src/entities.cpp -o src/entities.o
 
-$(OBJ_DIR)/main.o: main.cpp
-	$(CC) -c $(CFLAGS) -I$(INCLUDE_DIR) $< -o $@
-
-$(OBJ_DIR)/%.o: $(SRC_DIR)/%.cpp
-	$(CC) -c $(CFLAGS) -I$(INCLUDE_DIR) $< -o $@
+src/resources.o: src/resources.cpp include/resources.h include/game.h
+	$(CC) $(CFLAGS) $(INCLUDE) -c src/resources.cpp -o src/resources.o
 
 clean:
-	rm -f $(OBJ_DIR)/*.o $(EXECUTABLE)
+	rm -f $(OBJ) $(EXEC)
 
-.PHONY: clean
+.PHONY: all clean
