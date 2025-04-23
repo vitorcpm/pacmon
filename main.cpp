@@ -6,7 +6,7 @@
 int main(int argc, char **argv) {
     if (!initializeResources()) {
         std::cout << "Initialization failed!" << std::endl;
-        return -1;
+        return -1; //test
     }
 
     al_attach_audio_stream_to_mixer(music, al_get_default_mixer());
